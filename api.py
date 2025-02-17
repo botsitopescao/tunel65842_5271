@@ -10,18 +10,15 @@ import time
 
 # Obtención de variables de entorno
 API_SECRET = os.environ.get("API_SECRET", "A7Zb;zM(#fSmW+x9r6G_8e*jTPp`R~Qk")
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres.ahshhbtukahzeemozbtu:Aa7QqzZrguV2YN6esfcpMk@aws-0-sa-east-1.pooler.supabase.com:5432/postgres")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://postgres.ahshhbtukahzeemozbtu:Aa7QqzZrguV2YN6esfcpMk@aws-0-sa-east-1.pooler.supabase.com:5432/postgres"
+)
 
-# Inicialización del pool de conexiones
+# Inicialización del pool de conexiones (1 mínimo, 10 máximo)
 db_pool = pool.SimpleConnectionPool(1, 10, DATABASE_URL)
 if db_pool:
     print("Pool de conexiones creado")
-
-def get_conn():
-    conn = db_pool.getconn()
-    if conn.closed:
-        conn = db_pool.getconn()
-    return conn
 
 app = Flask(__name__)
 
@@ -44,17 +41,20 @@ def home_page():
     return "El bot está funcionando!", 200
 
 # --- Gestión de Usuarios ---
+
 @app.route("/api/registrados", methods=["GET"])
 def api_registrados():
     if not check_auth(request):
         return jsonify({"error": "No autorizado"}), 401
-    with get_conn().cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM registrations ORDER BY puntuacion DESC")
-        rows = cur.fetchall()
-    participantes = {}
-    for row in rows:
-        participantes[row["user_id"]] = row
-    return jsonify({"participants": participantes})
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM registrations ORDER BY puntuacion DESC")
+                rows = cur.fetchall()
+        participantes = {row["user_id"]: row for row in rows}
+        return jsonify({"participants": participantes})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/usuarios", methods=["POST"])
 def api_registrar_usuario():
@@ -78,22 +78,23 @@ def api_registrar_usuario():
         "grupo": data.get("grupo", 0)
     }
     try:
-        with get_conn().cursor() as cur:
-            cur.execute("""
-                INSERT INTO registrations (user_id, discord_name, fortnite_username, platform, country, puntuacion, etapa, grupo)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    discord_name = EXCLUDED.discord_name,
-                    fortnite_username = EXCLUDED.fortnite_username,
-                    platform = EXCLUDED.platform,
-                    country = EXCLUDED.country,
-                    puntuacion = EXCLUDED.puntuacion,
-                    etapa = EXCLUDED.etapa,
-                    grupo = EXCLUDED.grupo
-            """, (data["user_id"], participant["discord_name"], participant["fortnite_username"],
-                  participant["platform"], participant["country"], participant["puntuacion"],
-                  participant["etapa"], participant["grupo"]))
-        get_conn().commit()
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO registrations (user_id, discord_name, fortnite_username, platform, country, puntuacion, etapa, grupo)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        discord_name = EXCLUDED.discord_name,
+                        fortnite_username = EXCLUDED.fortnite_username,
+                        platform = EXCLUDED.platform,
+                        country = EXCLUDED.country,
+                        puntuacion = EXCLUDED.puntuacion,
+                        etapa = EXCLUDED.etapa,
+                        grupo = EXCLUDED.grupo
+                """, (data["user_id"], participant["discord_name"], participant["fortnite_username"],
+                      participant["platform"], participant["country"], participant["puntuacion"],
+                      participant["etapa"], participant["grupo"]))
+            conn.commit()
         return jsonify({"mensaje": f"Usuario {data['discord_name']} registrado/actualizado correctamente."}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -102,16 +103,17 @@ def api_registrar_usuario():
 def api_eliminar_usuario(user_id):
     if not check_auth(request):
         return jsonify({"error": "No autorizado"}), 401
-
     try:
-        with get_conn().cursor() as cur:
-            cur.execute("DELETE FROM registrations WHERE user_id = %s", (user_id,))
-        get_conn().commit()
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM registrations WHERE user_id = %s", (user_id,))
+            conn.commit()
         return jsonify({"mensaje": f"Usuario con ID {user_id} eliminado."}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # --- Gestión de Puntos ---
+
 @app.route("/api/puntos", methods=["POST"])
 def api_actualizar_puntos():
     if not check_auth(request):
@@ -137,8 +139,6 @@ def api_actualizar_puntos():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
