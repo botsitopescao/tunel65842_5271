@@ -1,6 +1,7 @@
 import os
 import psycopg2
 import psycopg2.extras
+from contextlib import contextmanager
 from psycopg2 import pool
 from flask import Flask, request, jsonify
 import datetime
@@ -29,6 +30,14 @@ def check_auth(req):
     if not auth or auth != f"Bearer {API_SECRET}":
         return False
     return True
+
+@contextmanager
+def get_db_connection():
+    conn = db_pool.getconn()
+    try:
+        yield conn
+    finally:
+        db_pool.putconn(conn)
 
 @app.route("/", methods=["GET"])
 def home_page():
@@ -116,16 +125,18 @@ def api_actualizar_puntos():
     delta = data["delta"]
 
     try:
-        with get_conn().cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT puntuacion FROM registrations WHERE user_id = %s", (user_id,))
-            row = cur.fetchone()
-            current = row["puntuacion"] if row and row["puntuacion"] is not None else 0
-            nuevos_puntos = int(current) + int(delta)
-            cur.execute("UPDATE registrations SET puntuacion = %s WHERE user_id = %s", (nuevos_puntos, user_id))
-        get_conn().commit()
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT puntuacion FROM registrations WHERE user_id = %s", (user_id,))
+                row = cur.fetchone()
+                current = row["puntuacion"] if row and row["puntuacion"] is not None else 0
+                nuevos_puntos = int(current) + int(delta)
+                cur.execute("UPDATE registrations SET puntuacion = %s WHERE user_id = %s", (nuevos_puntos, user_id))
+            conn.commit()
         return jsonify({"user_id": user_id, "nuevos_puntos": nuevos_puntos}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 8080))
